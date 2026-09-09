@@ -1,193 +1,160 @@
-import hashlib
+
 import logging
 import time
-from typing import Any, Dict, List
-from urllib.parse import quote, urljoin
+import hashlib
+from typing import Dict, List
+from urllib.parse import quote
 
 import feedparser
 import requests
 from bs4 import BeautifulSoup
 
-from config import config
-
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================
-# SOURCE URLS
-# ============================================================
-
-REMOTE_OK_API = "https://remoteok.com/api"
-
-ITPRO_INTERNSHIP_RSS = (
-    "https://itpro.lk/rss/all/internship"
-)
-
-TOPJOBS_RECENT_URL = (
-    "https://www.topjobs.lk/recentjobs.jsp"
-)
-
-XPRESSJOBS_INTERNSHIP_URL = (
-    "https://xpress.jobs/jobs?Sectors=27"
-)
-
-INTERNJOBS_URL = (
-    "https://internjobs.lk/"
-)
-
-WELLFOUND_ROLE_URLS = [
-    "https://wellfound.com/role/software-developer",
-    "https://wellfound.com/role/data-scientist",
-    "https://wellfound.com/role/data-engineer",
-    "https://wellfound.com/role/machine-learning-engineer",
-]
-
-# Google News RSS is used only as a discovery fallback
-# for sites that block GitHub Actions directly.
-GOOGLE_NEWS_RSS = (
-    "https://news.google.com/rss/search?q="
-)
-
-LINKEDIN_SEARCH_QUERIES = [
-    'site:linkedin.com/jobs/view "software engineer" "intern"',
-    'site:linkedin.com/jobs/view "software developer" "intern"',
-    'site:linkedin.com/jobs/view "data science" "intern"',
-    'site:linkedin.com/jobs/view "data scientist" "intern"',
-    'site:linkedin.com/jobs/view "machine learning" "intern"',
-    'site:linkedin.com/jobs/view "AI" "intern"',
-    'site:linkedin.com/jobs/view "data engineer" "intern"',
-]
-
-XPRESSJOBS_SEARCH_QUERIES = [
-    'site:xpress.jobs "software engineer" intern',
-    'site:xpress.jobs "software developer" intern',
-    'site:xpress.jobs "data science" intern',
-    'site:xpress.jobs "data scientist" intern',
-    'site:xpress.jobs "machine learning" intern',
-    'site:xpress.jobs "data engineer" intern',
-]
-
-
-# ============================================================
-# REQUEST HEADERS
-# ============================================================
-
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 "
-        "(Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/140.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,"
-        "application/xml;q=0.9,*/*;q=0.8"
-    ),
-    "Accept-Language": (
-        "en-US,en;q=0.9"
-    ),
-    "Connection": "keep-alive",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    )
+}
+
+REQUEST_TIMEOUT = 20
+
+
+# ============================================================
+# ROLE SEARCHES
+# ============================================================
+
+ROLE_SEARCHES = {
+    "Data Science": [
+        "data science intern",
+        "data scientist intern",
+        "data science internship",
+        "data scientist internship",
+        "data science trainee",
+        "junior data scientist",
+        "graduate data scientist",
+    ],
+
+    "Software Engineering": [
+        "software engineer intern",
+        "software engineering intern",
+        "software developer intern",
+        "software development intern",
+        "software engineer internship",
+        "software developer internship",
+        "junior software engineer",
+        "graduate software engineer",
+    ],
+
+    "AI/ML": [
+        "machine learning intern",
+        "machine learning internship",
+        "ml engineer intern",
+        "ml internship",
+        "ai intern",
+        "ai internship",
+        "ai engineer intern",
+        "ai/ml intern",
+        "artificial intelligence intern",
+        "deep learning intern",
+    ],
+
+    "Data Engineering": [
+        "data engineer intern",
+        "data engineering intern",
+        "data engineer internship",
+        "data engineering internship",
+        "junior data engineer",
+        "graduate data engineer",
+        "analytics engineer intern",
+    ],
 }
 
 
 # ============================================================
-# JOB ID
+# GENERAL HELPERS
 # ============================================================
 
-def create_job_id(
-    title: str,
-    company: str,
-    url: str
-) -> str:
-
-    raw = (
-        f"{title}|{company}|{url}"
-        .lower()
-        .strip()
-    )
-
-    return hashlib.sha256(
-        raw.encode("utf-8")
-    ).hexdigest()
+def make_job_id(source: str, title: str, company: str, url: str) -> str:
+    raw = f"{source}|{title}|{company}|{url}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-# ============================================================
-# HELPER: CLEAN TEXT
-# ============================================================
-
-def clean_text(
-    value: Any
-) -> str:
-
-    if value is None:
+def clean_text(value: str) -> str:
+    if not value:
         return ""
 
-    return BeautifulSoup(
-        str(value),
-        "html.parser"
-    ).get_text(
-        " ",
-        strip=True
-    )
+    soup = BeautifulSoup(str(value), "html.parser")
+
+    return " ".join(soup.get_text(" ").split())
 
 
-# ============================================================
-# HELPER: BUILD JOB
-# ============================================================
+def request_page(url: str):
+    try:
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+        )
 
-def make_job(
-    title: str,
-    company: str,
-    url: str,
-    description: str,
-    location: str,
+        response.raise_for_status()
+
+        return response
+
+    except requests.RequestException as error:
+        logger.warning(
+            "Request failed: %s | %s",
+            url,
+            error,
+        )
+
+        return None
+
+
+def add_job(
+    jobs: List[Dict],
     source: str,
-    date: Any = None,
-    tags: Any = None,
-) -> Dict[str, Any]:
+    title: str,
+    company: str = "Unknown",
+    location: str = "Unknown",
+    url: str = "",
+    description: str = "",
+    date=None,
+    category: str = None,
+    tags=None,
+):
+    title = clean_text(title)
+    company = clean_text(company)
+    location = clean_text(location)
+    description = clean_text(description)
 
-    job_id = create_job_id(
+    if not title or not url:
+        return
+
+    job_id = make_job_id(
+        source,
         title,
         company,
-        url
+        url,
     )
 
-    return {
-        "id": job_id,
-        "title": title.strip(),
-        "company": company.strip()
-        if company
-        else "Unknown",
-        "url": url.strip(),
-        "description": description or "",
-        "location": location or "Unknown",
-        "tags": tags or [],
-        "date": date,
-        "source": source,
-    }
-
-
-# ============================================================
-# HELPER: UNIQUE JOBS
-# ============================================================
-
-def unique_jobs(
-    jobs: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
-
-    unique = {}
-
-    for job in jobs:
-
-        job_id = job.get("id")
-
-        if job_id:
-            unique[job_id] = job
-
-    return list(
-        unique.values()
+    jobs.append(
+        {
+            "id": job_id,
+            "title": title,
+            "company": company or "Unknown",
+            "location": location or "Unknown",
+            "url": url,
+            "description": description,
+            "date": date,
+            "source": source,
+            "category": category,
+            "tags": tags or [],
+        }
     )
 
 
@@ -195,1343 +162,769 @@ def unique_jobs(
 # REMOTEOK
 # ============================================================
 
-def fetch_remoteok() -> List[Dict[str, Any]]:
+def fetch_remoteok() -> List[Dict]:
+    jobs = []
 
-    for attempt in range(
-        1,
-        config.MAX_RETRIES + 1
-    ):
+    logger.info("Fetching RemoteOK...")
 
-        try:
-
-            logger.info(
-                "Fetching RemoteOK "
-                "(attempt %s/%s)",
-                attempt,
-                config.MAX_RETRIES
-            )
-
-            response = requests.get(
-                REMOTE_OK_API,
-                headers=HEADERS,
-                timeout=30
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
-
-            jobs = []
-
-            for item in data:
-
-                if not isinstance(
-                    item,
-                    dict
-                ):
-                    continue
-
-                title = (
-                    item.get("position")
-                    or ""
-                ).strip()
-
-                company = (
-                    item.get("company")
-                    or ""
-                ).strip()
-
-                url = (
-                    item.get("url")
-                    or ""
-                ).strip()
-
-                if not title or not url:
-                    continue
-
-                jobs.append(
-                    make_job(
-                        title=title,
-                        company=company,
-                        url=url,
-                        description=item.get(
-                            "description",
-                            ""
-                        ),
-                        location=item.get(
-                            "location",
-                            "Remote"
-                        ),
-                        source="RemoteOK",
-                        date=item.get(
-                            "date"
-                        ),
-                        tags=item.get(
-                            "tags",
-                            []
-                        ),
-                    )
-                )
-
-            logger.info(
-                "RemoteOK returned %s jobs",
-                len(jobs)
-            )
-
-            return jobs
-
-        except requests.RequestException as error:
-
-            logger.warning(
-                "RemoteOK request failed: %s",
-                error
-            )
-
-            if attempt < config.MAX_RETRIES:
-
-                time.sleep(
-                    config.REQUEST_DELAY
-                )
-
-        except ValueError as error:
-
-            logger.error(
-                "RemoteOK JSON error: %s",
-                error
-            )
-
-            return []
-
-    return []
-
-
-# ============================================================
-# ITPRO.LK
-# ============================================================
-
-def fetch_itpro() -> List[Dict[str, Any]]:
-
-    logger.info(
-        "Fetching ITPro.lk internship RSS feed"
+    response = request_page(
+        "https://remoteok.com/api"
     )
 
+    if response is None:
+        return jobs
+
     try:
+        data = response.json()
 
-        response = requests.get(
-            ITPRO_INTERNSHIP_RSS,
-            headers=HEADERS,
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        feed = feedparser.parse(
-            response.content
-        )
-
-        jobs = []
-
-        for entry in feed.entries:
-
-            title = (
-                entry.get("title")
-                or ""
-            ).strip()
-
-            url = (
-                entry.get("link")
-                or ""
-            ).strip()
-
-            if not title or not url:
+        for item in data:
+            if not isinstance(item, dict):
                 continue
 
-            description = clean_text(
-                entry.get(
-                    "summary",
-                    ""
-                )
-            )
+            title = item.get("position", "")
+            company = item.get("company", "")
+            location = item.get("location", "")
+            url = item.get("url", "")
 
-            company = (
-                entry.get(
-                    "author",
-                    ""
-                )
-                or "ITPro.lk Listing"
-            )
+            if not url:
+                slug = item.get("slug", "")
+                if slug:
+                    url = f"https://remoteok.com/remote-jobs/{slug}"
 
-            published = (
-                entry.get(
-                    "published",
-                    ""
-                )
-            )
+            description = item.get("description", "")
+            date = item.get("date")
 
-            jobs.append(
-                make_job(
-                    title=title,
-                    company=company,
-                    url=url,
-                    description=description,
-                    location="Sri Lanka",
-                    source="ITPro.lk",
-                    date=published,
-                )
+            tags = item.get("tags", [])
+
+            add_job(
+                jobs=jobs,
+                source="RemoteOK",
+                title=title,
+                company=company,
+                location=location or "Remote",
+                url=url,
+                description=description,
+                date=date,
+                tags=tags,
             )
 
         logger.info(
-            "ITPro.lk returned %s jobs",
-            len(jobs)
+            "RemoteOK: %s jobs fetched",
+            len(jobs),
         )
-
-        return unique_jobs(jobs)
-
-    except requests.RequestException as error:
-
-        logger.error(
-            "ITPro.lk request failed: %s",
-            error
-        )
-
-        return []
 
     except Exception as error:
-
-        logger.error(
-            "ITPro.lk RSS parsing failed: %s",
-            error
+        logger.warning(
+            "RemoteOK parsing failed: %s",
+            error,
         )
 
-        return []
+    return jobs
+
+
+# ============================================================
+# ITPro.lk
+# ============================================================
+
+def fetch_itpro() -> List[Dict]:
+    jobs = []
+
+    logger.info("Fetching ITPro.lk...")
+
+    urls = [
+        "https://itpro.lk/jobs/",
+        "https://itpro.lk/",
+    ]
+
+    for page_url in urls:
+        response = request_page(page_url)
+
+        if response is None:
+            continue
+
+        try:
+            soup = BeautifulSoup(
+                response.text,
+                "html.parser",
+            )
+
+            links = soup.find_all("a", href=True)
+
+            for link in links:
+                title = link.get_text(" ", strip=True)
+
+                if not title:
+                    continue
+
+                href = link.get("href", "")
+
+                if href.startswith("/"):
+                    href = "https://itpro.lk" + href
+
+                if "itpro.lk" not in href:
+                    continue
+
+                combined = title.lower()
+
+                if not any(
+                    word in combined
+                    for searches in ROLE_SEARCHES.values()
+                    for word in searches
+                ):
+                    continue
+
+                add_job(
+                    jobs=jobs,
+                    source="ITPro.lk",
+                    title=title,
+                    company="Unknown",
+                    location="Sri Lanka",
+                    url=href,
+                    description=title,
+                )
+
+        except Exception as error:
+            logger.warning(
+                "ITPro parsing failed: %s",
+                error,
+            )
+
+    jobs = deduplicate_jobs(jobs)
+
+    logger.info(
+        "ITPro.lk: %s jobs fetched",
+        len(jobs),
+    )
+
+    return jobs
 
 
 # ============================================================
 # TOPJOBS
 # ============================================================
 
-def fetch_topjobs() -> List[Dict[str, Any]]:
-
-    logger.info(
-        "Fetching TopJobs recent jobs"
-    )
-
-    try:
-
-        response = requests.get(
-            TOPJOBS_RECENT_URL,
-            headers=HEADERS,
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        jobs = []
-
-        for link in soup.find_all(
-            "a",
-            href=True
-        ):
-
-            title = link.get_text(
-                " ",
-                strip=True
-            )
-
-            href = link.get(
-                "href",
-                ""
-            ).strip()
-
-            if not title or not href:
-                continue
-
-            full_url = urljoin(
-                "https://www.topjobs.lk/",
-                href
-            )
-
-            if not full_url.startswith(
-                "http"
-            ):
-                continue
-
-            href_lower = href.lower()
-
-            job_link = any(
-                part in href_lower
-                for part in [
-                    "job",
-                    "vacancy",
-                    "jobs",
-                    "jobdetails",
-                ]
-            )
-
-            if not job_link:
-                continue
-
-            parent_text = ""
-
-            if link.parent:
-
-                parent_text = (
-                    link.parent.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-            if link.parent and link.parent.parent:
-
-                grandparent_text = (
-                    link.parent.parent.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-                if len(
-                    grandparent_text
-                ) > len(
-                    parent_text
-                ):
-
-                    parent_text = (
-                        grandparent_text
-                    )
-
-            combined_text = (
-                f"{title} "
-                f"{parent_text}"
-            ).lower()
-
-            possible_role = any(
-                keyword in combined_text
-                for keyword in [
-                    "intern",
-                    "internship",
-                    "trainee",
-                    "software",
-                    "developer",
-                    "data scientist",
-                    "data science",
-                    "data engineer",
-                    "data engineering",
-                    "machine learning",
-                    "artificial intelligence",
-                    "ai/ml",
-                    "ml engineer",
-                    "cloud engineer",
-                    "devops",
-                ]
-            )
-
-            if not possible_role:
-                continue
-
-            company = "TopJobs Listing"
-
-            for separator in [
-                " - ",
-                " | ",
-                " – ",
-                " — ",
-            ]:
-
-                if separator in parent_text:
-
-                    parts = parent_text.split(
-                        separator,
-                        1
-                    )
-
-                    if len(parts) == 2:
-
-                        possible_company = (
-                            parts[1].strip()
-                        )
-
-                        if (
-                            possible_company
-                            and len(
-                                possible_company
-                            ) < 150
-                        ):
-
-                            company = (
-                                possible_company
-                            )
-
-                            break
-
-            jobs.append(
-                make_job(
-                    title=title,
-                    company=company,
-                    url=full_url,
-                    description=parent_text,
-                    location="Sri Lanka",
-                    source="TopJobs",
-                )
-            )
-
-        jobs = unique_jobs(jobs)
-
-        logger.info(
-            "TopJobs returned %s possible jobs",
-            len(jobs)
-        )
-
-        return jobs
-
-    except requests.RequestException as error:
-
-        logger.error(
-            "TopJobs request failed: %s",
-            error
-        )
-
-        return []
-
-    except Exception as error:
-
-        logger.error(
-            "TopJobs parsing failed: %s",
-            error
-        )
-
-        return []
-
-
-# ============================================================
-# XPRESSJOBS DIRECT
-# ============================================================
-
-def fetch_xpressjobs_direct() -> List[Dict[str, Any]]:
-
-    logger.info(
-        "Fetching XpressJobs internship listings directly"
-    )
-
-    try:
-
-        response = requests.get(
-            XPRESSJOBS_INTERNSHIP_URL,
-            headers=HEADERS,
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        jobs = []
-
-        for link in soup.find_all(
-            "a",
-            href=True
-        ):
-
-            title = link.get_text(
-                " ",
-                strip=True
-            )
-
-            href = link.get(
-                "href",
-                ""
-            ).strip()
-
-            if not title or not href:
-                continue
-
-            href_lower = href.lower()
-
-            if (
-                "/jobs/view/"
-                not in href_lower
-            ):
-                continue
-
-            full_url = urljoin(
-                "https://xpress.jobs/",
-                href
-            )
-
-            parent_text = ""
-
-            if link.parent:
-
-                parent_text = (
-                    link.parent.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-            if link.parent and link.parent.parent:
-
-                grandparent_text = (
-                    link.parent.parent.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-                if len(
-                    grandparent_text
-                ) > len(
-                    parent_text
-                ):
-
-                    parent_text = (
-                        grandparent_text
-                    )
-
-            combined_text = (
-                f"{title} "
-                f"{parent_text}"
-            ).lower()
-
-            technology_or_internship = any(
-                keyword in combined_text
-                for keyword in [
-                    "intern",
-                    "internship",
-                    "trainee",
-                    "software",
-                    "developer",
-                    "data",
-                    "machine learning",
-                    "artificial intelligence",
-                    "ai",
-                    "engineer",
-                ]
-            )
-
-            if not technology_or_internship:
-                continue
-
-            company = (
-                "XpressJobs Listing"
-            )
-
-            for separator in [
-                " | ",
-                " - ",
-                " – ",
-                " — ",
-            ]:
-
-                if separator in parent_text:
-
-                    parts = parent_text.split(
-                        separator,
-                        1
-                    )
-
-                    if len(parts) == 2:
-
-                        possible_company = (
-                            parts[1].strip()
-                        )
-
-                        if (
-                            possible_company
-                            and len(
-                                possible_company
-                            ) < 150
-                        ):
-
-                            company = (
-                                possible_company
-                            )
-
-                            break
-
-            jobs.append(
-                make_job(
-                    title=title,
-                    company=company,
-                    url=full_url,
-                    description=parent_text,
-                    location="Sri Lanka",
-                    source="XpressJobs",
-                )
-            )
-
-        jobs = unique_jobs(jobs)
-
-        logger.info(
-            "XpressJobs direct returned %s jobs",
-            len(jobs)
-        )
-
-        return jobs
-
-    except requests.RequestException as error:
-
-        logger.warning(
-            "XpressJobs direct request failed: %s",
-            error
-        )
-
-        return []
-
-    except Exception as error:
-
-        logger.warning(
-            "XpressJobs direct parsing failed: %s",
-            error
-        )
-
-        return []
-
-
-# ============================================================
-# GOOGLE NEWS RSS DISCOVERY
-# ============================================================
-
-def fetch_google_news_results(
-    queries: List[str],
-    source_name: str,
-    source_domains: List[str],
-) -> List[Dict[str, Any]]:
-
+def fetch_topjobs() -> List[Dict]:
     jobs = []
 
-    for query in queries:
+    logger.info("Fetching TopJobs...")
 
-        try:
+    search_urls = []
 
-            encoded_query = quote(
-                query
+    for searches in ROLE_SEARCHES.values():
+        for query in searches:
+            search_urls.append(
+                "https://www.topjobs.lk/applicant/vacancybyfunctionalarea.jsp"
             )
 
-            url = (
-                GOOGLE_NEWS_RSS
-                + encoded_query
+    # Main public page
+    response = request_page(
+        "https://www.topjobs.lk/"
+    )
+
+    if response is None:
+        return jobs
+
+    try:
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser",
+        )
+
+        links = soup.find_all("a", href=True)
+
+        for link in links:
+            title = link.get_text(
+                " ",
+                strip=True,
             )
 
-            logger.info(
-                "%s discovery search: %s",
-                source_name,
-                query
+            href = link.get("href", "")
+
+            if not title or not href:
+                continue
+
+            title_lower = title.lower()
+
+            if not any(
+                keyword in title_lower
+                for searches in ROLE_SEARCHES.values()
+                for keyword in searches
+            ):
+                continue
+
+            if href.startswith("/"):
+                href = "https://www.topjobs.lk" + href
+
+            add_job(
+                jobs=jobs,
+                source="TopJobs",
+                title=title,
+                company="Unknown",
+                location="Sri Lanka",
+                url=href,
+                description=title,
             )
 
-            response = requests.get(
-                url,
-                headers=HEADERS,
-                timeout=30
-            )
+    except Exception as error:
+        logger.warning(
+            "TopJobs parsing failed: %s",
+            error,
+        )
 
-            response.raise_for_status()
-
-            feed = feedparser.parse(
-                response.content
-            )
-
-            for entry in feed.entries:
-
-                title = clean_text(
-                    entry.get(
-                        "title",
-                        ""
-                    )
-                )
-
-                link = (
-                    entry.get(
-                        "link",
-                        ""
-                    )
-                    or ""
-                ).strip()
-
-                description = clean_text(
-                    entry.get(
-                        "summary",
-                        ""
-                    )
-                )
-
-                combined = (
-                    f"{title} "
-                    f"{description}"
-                ).lower()
-
-                # We only want our intended source.
-                source_match = any(
-                    domain.lower()
-                    in combined
-                    or domain.lower()
-                    in link.lower()
-                    for domain in source_domains
-                )
-
-                if not source_match:
-                    continue
-
-                # Google News may return its own redirect.
-                # Keep only obvious source URLs.
-                source_url = link
-
-                for domain in source_domains:
-
-                    if domain.lower() in link.lower():
-
-                        source_url = link
-                        break
-
-                if not source_url.startswith(
-                    "http"
-                ):
-                    continue
-
-                company = (
-                    f"{source_name} Listing"
-                )
-
-                jobs.append(
-                    make_job(
-                        title=title,
-                        company=company,
-                        url=source_url,
-                        description=description,
-                        location=(
-                            "Remote"
-                            if source_name
-                            == "LinkedIn"
-                            else "Sri Lanka"
-                        ),
-                        source=source_name,
-                        date=entry.get(
-                            "published"
-                        ),
-                    )
-                )
-
-            time.sleep(
-                1
-            )
-
-        except requests.RequestException as error:
-
-            logger.warning(
-                "%s discovery request failed: %s",
-                source_name,
-                error
-            )
-
-        except Exception as error:
-
-            logger.warning(
-                "%s discovery parsing failed: %s",
-                source_name,
-                error
-            )
-
-    jobs = unique_jobs(jobs)
+    jobs = deduplicate_jobs(jobs)
 
     logger.info(
-        "%s discovery returned %s possible jobs",
-        source_name,
-        len(jobs)
+        "TopJobs: %s jobs fetched",
+        len(jobs),
     )
 
     return jobs
 
 
 # ============================================================
-# XPRESSJOBS FALLBACK
+# INTERNSJOBS.LK
 # ============================================================
 
-def fetch_xpressjobs() -> List[Dict[str, Any]]:
+def fetch_internjobs() -> List[Dict]:
+    jobs = []
 
-    direct_jobs = (
-        fetch_xpressjobs_direct()
+    logger.info("Fetching InternJobs.lk...")
+
+    response = request_page(
+        "https://internjobs.lk/"
     )
 
-    if direct_jobs:
-        return direct_jobs
-
-    logger.info(
-        "Using XpressJobs discovery fallback"
-    )
-
-    return fetch_google_news_results(
-        queries=XPRESSJOBS_SEARCH_QUERIES,
-        source_name="XpressJobs",
-        source_domains=[
-            "xpress.jobs"
-        ],
-    )
-
-
-# ============================================================
-# INTERNJOBS.LK
-# ============================================================
-
-def fetch_internjobs() -> List[Dict[str, Any]]:
-
-    logger.info(
-        "Fetching InternJobs.lk listings"
-    )
+    if response is None:
+        return jobs
 
     try:
-
-        response = requests.get(
-            INTERNJOBS_URL,
-            headers=HEADERS,
-            timeout=30
-        )
-
-        response.raise_for_status()
-
         soup = BeautifulSoup(
             response.text,
-            "html.parser"
+            "html.parser",
         )
 
-        jobs = []
+        links = soup.find_all("a", href=True)
 
-        for link in soup.find_all(
-            "a",
-            href=True
-        ):
-
+        for link in links:
             title = link.get_text(
                 " ",
-                strip=True
+                strip=True,
             )
 
-            href = link.get(
-                "href",
-                ""
-            ).strip()
+            href = link.get("href", "")
 
             if not title or not href:
                 continue
 
-            href_lower = href.lower()
+            if href.startswith("/"):
+                href = "https://internjobs.lk" + href
 
-            possible_job = any(
-                keyword in href_lower
-                for keyword in [
-                    "/job",
-                    "/jobs",
-                    "/intern",
-                    "/internship",
-                    "/vacancy",
-                ]
-            )
+            combined = title.lower()
 
-            if not possible_job:
+            if not any(
+                keyword in combined
+                for searches in ROLE_SEARCHES.values()
+                for keyword in searches
+            ):
                 continue
 
-            full_url = urljoin(
-                INTERNJOBS_URL,
-                href
+            add_job(
+                jobs=jobs,
+                source="InternJobs.lk",
+                title=title,
+                company="Unknown",
+                location="Sri Lanka",
+                url=href,
+                description=title,
             )
-
-            parent_text = ""
-
-            if link.parent:
-
-                parent_text = (
-                    link.parent.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-            if link.parent and link.parent.parent:
-
-                grandparent_text = (
-                    link.parent.parent.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-                if len(
-                    grandparent_text
-                ) > len(
-                    parent_text
-                ):
-
-                    parent_text = (
-                        grandparent_text
-                    )
-
-            combined_text = (
-                f"{title} "
-                f"{parent_text}"
-            ).lower()
-
-            possible_role = any(
-                keyword in combined_text
-                for keyword in [
-                    "intern",
-                    "internship",
-                    "software",
-                    "developer",
-                    "data scientist",
-                    "data science",
-                    "data engineer",
-                    "machine learning",
-                    "artificial intelligence",
-                    "ai",
-                    "engineer",
-                ]
-            )
-
-            if not possible_role:
-                continue
-
-            company = (
-                "InternJobs.lk Listing"
-            )
-
-            for separator in [
-                " | ",
-                " - ",
-                " – ",
-                " — ",
-            ]:
-
-                if separator in parent_text:
-
-                    parts = parent_text.split(
-                        separator,
-                        1
-                    )
-
-                    if len(parts) == 2:
-
-                        possible_company = (
-                            parts[1].strip()
-                        )
-
-                        if (
-                            possible_company
-                            and len(
-                                possible_company
-                            ) < 150
-                        ):
-
-                            company = (
-                                possible_company
-                            )
-
-                            break
-
-            jobs.append(
-                make_job(
-                    title=title,
-                    company=company,
-                    url=full_url,
-                    description=parent_text,
-                    location="Sri Lanka",
-                    source="InternJobs.lk",
-                )
-            )
-
-        jobs = unique_jobs(jobs)
-
-        logger.info(
-            "InternJobs.lk returned %s possible jobs",
-            len(jobs)
-        )
-
-        return jobs
-
-    except requests.RequestException as error:
-
-        logger.error(
-            "InternJobs.lk request failed: %s",
-            error
-        )
-
-        return []
 
     except Exception as error:
-
-        logger.error(
-            "InternJobs.lk parsing failed: %s",
-            error
+        logger.warning(
+            "InternJobs parsing failed: %s",
+            error,
         )
 
-        return []
+    jobs = deduplicate_jobs(jobs)
+
+    logger.info(
+        "InternJobs.lk: %s jobs fetched",
+        len(jobs),
+    )
+
+    return jobs
 
 
 # ============================================================
 # WELLFOUND
 # ============================================================
 
-def fetch_wellfound() -> List[Dict[str, Any]]:
-
-    logger.info(
-        "Fetching Wellfound role pages"
-    )
-
+def fetch_wellfound() -> List[Dict]:
     jobs = []
 
-    for role_url in WELLFOUND_ROLE_URLS:
+    logger.info("Fetching Wellfound role pages...")
+
+    role_pages = [
+        (
+            "Software Engineering",
+            "https://wellfound.com/role/software-engineer"
+        ),
+        (
+            "Data Science",
+            "https://wellfound.com/role/data-scientist"
+        ),
+        (
+            "AI/ML",
+            "https://wellfound.com/role/machine-learning-engineer"
+        ),
+        (
+            "Data Engineering",
+            "https://wellfound.com/role/data-engineer"
+        ),
+    ]
+
+    for category, page_url in role_pages:
+        response = request_page(page_url)
+
+        if response is None:
+            continue
 
         try:
-
-            response = requests.get(
-                role_url,
-                headers=HEADERS,
-                timeout=30
-            )
-
-            response.raise_for_status()
-
             soup = BeautifulSoup(
                 response.text,
-                "html.parser"
+                "html.parser",
             )
 
-            for link in soup.find_all(
+            links = soup.find_all(
                 "a",
-                href=True
-            ):
+                href=True,
+            )
 
-                href = link.get(
-                    "href",
-                    ""
-                ).strip()
-
+            for link in links:
                 title = link.get_text(
                     " ",
-                    strip=True
+                    strip=True,
                 )
 
-                if not title:
+                href = link.get("href", "")
+
+                if not title or not href:
                     continue
 
                 if "/jobs/" not in href:
                     continue
 
-                full_url = urljoin(
-                    "https://wellfound.com/",
-                    href
-                )
+                if href.startswith("/"):
+                    href = "https://wellfound.com" + href
 
-                parent_text = ""
+                combined = title.lower()
 
-                if link.parent:
-
-                    parent_text = (
-                        link.parent.get_text(
-                            " ",
-                            strip=True
-                        )
+                if not any(
+                    keyword in combined
+                    for keyword in ROLE_SEARCHES.get(
+                        category,
+                        []
                     )
-
-                if link.parent and link.parent.parent:
-
-                    grandparent_text = (
-                        link.parent.parent.get_text(
-                            " ",
-                            strip=True
-                        )
-                    )
-
-                    if len(
-                        grandparent_text
-                    ) > len(
-                        parent_text
-                    ):
-
-                        parent_text = (
-                            grandparent_text
-                        )
-
-                combined_text = (
-                    f"{title} "
-                    f"{parent_text}"
-                ).lower()
-
-                role_match = any(
-                    keyword in combined_text
-                    for keyword in [
-                        "software",
-                        "developer",
-                        "engineering",
-                        "engineer",
-                        "machine learning",
-                        "ml",
-                        "artificial intelligence",
-                        "ai",
-                        "data scientist",
-                        "data science",
-                        "data engineer",
-                    ]
-                )
-
-                if not role_match:
+                ):
                     continue
 
-                internship_match = any(
-                    keyword in combined_text
-                    for keyword in [
-                        "intern",
-                        "internship",
-                        "trainee",
-                        "student",
-                        "no experience",
-                    ]
+                add_job(
+                    jobs=jobs,
+                    source="Wellfound",
+                    title=title,
+                    company="Unknown",
+                    location="Remote",
+                    url=href,
+                    description=title,
+                    category=category,
                 )
-
-                if not internship_match:
-                    continue
-
-                company = (
-                    "Wellfound Listing"
-                )
-
-                # Try to identify company from
-                # nearby links/text.
-                if link.parent:
-
-                    for candidate in (
-                        link.parent.find_all(
-                            "a",
-                            href=True
-                        )
-                    ):
-
-                        candidate_text = (
-                            candidate.get_text(
-                                " ",
-                                strip=True
-                            )
-                        )
-
-                        if (
-                            candidate_text
-                            and candidate_text != title
-                            and len(
-                                candidate_text
-                            ) < 100
-                        ):
-
-                            company = (
-                                candidate_text
-                            )
-
-                            break
-
-                jobs.append(
-                    make_job(
-                        title=title,
-                        company=company,
-                        url=full_url,
-                        description=parent_text,
-                        location="Remote / Global",
-                        source="Wellfound",
-                    )
-                )
-
-        except requests.RequestException as error:
-
-            logger.warning(
-                "Wellfound role page failed "
-                "(%s): %s",
-                role_url,
-                error
-            )
 
         except Exception as error:
-
             logger.warning(
-                "Wellfound parsing failed "
-                "(%s): %s",
-                role_url,
-                error
+                "Wellfound parsing failed for %s: %s",
+                category,
+                error,
             )
 
-    jobs = unique_jobs(jobs)
+    jobs = deduplicate_jobs(jobs)
 
     logger.info(
-        "Wellfound returned %s possible jobs",
-        len(jobs)
+        "Wellfound: %s jobs fetched",
+        len(jobs),
     )
 
     return jobs
 
 
 # ============================================================
-# LINKEDIN
+# GOOGLE NEWS RSS SEARCH
+# Used for XpressJobs + LinkedIn discovery
 # ============================================================
 
-def fetch_linkedin() -> List[Dict[str, Any]]:
+def fetch_google_news_search(
+    query: str,
+    source: str,
+    site_filter: str,
+) -> List[Dict]:
+
+    jobs = []
+
+    encoded_query = quote(
+        f'{query} site:{site_filter}'
+    )
+
+    rss_url = (
+        "https://news.google.com/rss/search?"
+        f"q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
+    )
+
+    response = request_page(rss_url)
+
+    if response is None:
+        return jobs
+
+    try:
+        feed = feedparser.parse(
+            response.content
+        )
+
+        for entry in feed.entries:
+
+            title = clean_text(
+                entry.get("title", "")
+            )
+
+            description = clean_text(
+                entry.get("description", "")
+            )
+
+            link = entry.get("link", "")
+
+            if not title or not link:
+                continue
+
+            combined = (
+                f"{title} "
+                f"{description}"
+            ).lower()
+
+            # Make sure the result is actually relevant
+            # to the search we requested.
+            role_words = query.lower().split()
+
+            if not any(
+                word in combined
+                for word in role_words
+                if len(word) > 2
+            ):
+                continue
+
+            date = entry.get(
+                "published",
+                None,
+            )
+
+            add_job(
+                jobs=jobs,
+                source=source,
+                title=title,
+                company=source,
+                location="Sri Lanka / Remote",
+                url=link,
+                description=description,
+                date=date,
+            )
+
+    except Exception as error:
+        logger.warning(
+            "Google News RSS parsing failed: %s",
+            error,
+        )
+
+    return jobs
+
+
+def fetch_xpressjobs() -> List[Dict]:
+    jobs = []
 
     logger.info(
-        "Fetching LinkedIn internship discoveries"
+        "Fetching XpressJobs using direct + discovery methods..."
     )
 
-    jobs = fetch_google_news_results(
-        queries=LINKEDIN_SEARCH_QUERIES,
-        source_name="LinkedIn",
-        source_domains=[
-            "linkedin.com/jobs"
-        ],
+    # Try direct page first.
+    response = request_page(
+        "https://xpress.jobs/"
     )
 
-    # Make sure we only keep actual LinkedIn
-    # job URLs, not generic LinkedIn pages.
-    filtered = []
+    if response is not None:
+        try:
+            soup = BeautifulSoup(
+                response.text,
+                "html.parser",
+            )
+
+            links = soup.find_all(
+                "a",
+                href=True,
+            )
+
+            for link in links:
+                title = link.get_text(
+                    " ",
+                    strip=True,
+                )
+
+                href = link.get(
+                    "href",
+                    "",
+                )
+
+                if not title or not href:
+                    continue
+
+                combined = title.lower()
+
+                if not any(
+                    keyword in combined
+                    for searches in ROLE_SEARCHES.values()
+                    for keyword in searches
+                ):
+                    continue
+
+                if href.startswith("/"):
+                    href = "https://xpress.jobs" + href
+
+                add_job(
+                    jobs=jobs,
+                    source="XpressJobs",
+                    title=title,
+                    company="Unknown",
+                    location="Sri Lanka",
+                    url=href,
+                    description=title,
+                )
+
+        except Exception as error:
+            logger.warning(
+                "XpressJobs direct parsing failed: %s",
+                error,
+            )
+
+    # Google News discovery for EVERY role category.
+    for category, searches in ROLE_SEARCHES.items():
+
+        for query in searches:
+
+            logger.info(
+                "XpressJobs search: %s",
+                query,
+            )
+
+            results = fetch_google_news_search(
+                query=query,
+                source="XpressJobs",
+                site_filter="xpress.jobs",
+            )
+
+            for job in results:
+                job["category"] = category
+
+            jobs.extend(results)
+
+            time.sleep(0.5)
+
+    jobs = deduplicate_jobs(jobs)
+
+    logger.info(
+        "XpressJobs: %s jobs fetched",
+        len(jobs),
+    )
+
+    return jobs
+
+
+def fetch_linkedin() -> List[Dict]:
+    jobs = []
+
+    logger.info(
+        "Fetching LinkedIn job discovery results..."
+    )
+
+    # IMPORTANT:
+    # This does NOT log into LinkedIn or scrape private pages.
+    # It uses public search-index discovery.
+
+    for category, searches in ROLE_SEARCHES.items():
+
+        for query in searches:
+
+            logger.info(
+                "LinkedIn search: %s",
+                query,
+            )
+
+            results = fetch_google_news_search(
+                query=query,
+                source="LinkedIn",
+                site_filter="linkedin.com/jobs/view",
+            )
+
+            for job in results:
+                job["category"] = category
+
+            jobs.extend(results)
+
+            time.sleep(0.5)
+
+    jobs = deduplicate_jobs(jobs)
+
+    logger.info(
+        "LinkedIn: %s jobs discovered",
+        len(jobs),
+    )
+
+    return jobs
+
+
+# ============================================================
+# DEDUPLICATION
+# ============================================================
+
+def deduplicate_jobs(
+    jobs: List[Dict],
+) -> List[Dict]:
+
+    unique = {}
+    seen_urls = set()
 
     for job in jobs:
 
-        url = job.get(
-            "url",
-            ""
-        ).lower()
+        url = job.get("url", "").strip()
 
-        if (
-            "linkedin.com/jobs/view"
-            in url
-        ):
+        title = job.get(
+            "title",
+            "",
+        ).strip().lower()
 
-            filtered.append(
-                job
+        company = job.get(
+            "company",
+            "",
+        ).strip().lower()
+
+        if not title:
+            continue
+
+        # Prefer URL when available.
+        if url:
+            key = url.lower()
+        else:
+            key = (
+                f"{title}|{company}"
             )
 
+        if key in seen_urls:
+            continue
+
+        seen_urls.add(key)
+        unique[key] = job
+
+    return list(unique.values())
+
+
+# ============================================================
+# MAIN FETCH FUNCTION
+# ============================================================
+
+def fetch_all_jobs() -> List[Dict]:
+
     logger.info(
-        "LinkedIn returned %s possible jobs",
-        len(filtered)
+        "========== Fetching ALL internship sources =========="
     )
-
-    return unique_jobs(
-        filtered
-    )
-
-
-# ============================================================
-# FETCH ALL SOURCES
-# ============================================================
-
-def fetch_all_jobs() -> List[Dict[str, Any]]:
 
     all_jobs = []
 
     # --------------------------------------------------------
-    # RemoteOK
+    # Fetch each source
     # --------------------------------------------------------
 
-    remoteok_jobs = fetch_remoteok()
+    fetchers = [
+        ("RemoteOK", fetch_remoteok),
+        ("ITPro.lk", fetch_itpro),
+        ("TopJobs", fetch_topjobs),
+        ("InternJobs.lk", fetch_internjobs),
+        ("Wellfound", fetch_wellfound),
+        ("XpressJobs", fetch_xpressjobs),
+        ("LinkedIn", fetch_linkedin),
+    ]
 
-    all_jobs.extend(
-        remoteok_jobs
-    )
+    for source_name, fetcher in fetchers:
 
-    # --------------------------------------------------------
-    # ITPro.lk
-    # --------------------------------------------------------
+        try:
+            source_jobs = fetcher()
 
-    itpro_jobs = fetch_itpro()
+            logger.info(
+                "%s returned %s jobs",
+                source_name,
+                len(source_jobs),
+            )
 
-    all_jobs.extend(
-        itpro_jobs
-    )
+            all_jobs.extend(source_jobs)
 
-    # --------------------------------------------------------
-    # TopJobs
-    # --------------------------------------------------------
+        except Exception as error:
 
-    topjobs_jobs = fetch_topjobs()
-
-    all_jobs.extend(
-        topjobs_jobs
-    )
-
-    # --------------------------------------------------------
-    # XpressJobs
-    # --------------------------------------------------------
-
-    xpressjobs_jobs = fetch_xpressjobs()
-
-    all_jobs.extend(
-        xpressjobs_jobs
-    )
-
-    # --------------------------------------------------------
-    # InternJobs.lk
-    # --------------------------------------------------------
-
-    internjobs_jobs = fetch_internjobs()
-
-    all_jobs.extend(
-        internjobs_jobs
-    )
-
-    # --------------------------------------------------------
-    # Wellfound
-    # --------------------------------------------------------
-
-    wellfound_jobs = fetch_wellfound()
-
-    all_jobs.extend(
-        wellfound_jobs
-    )
-
-    # --------------------------------------------------------
-    # LinkedIn
-    # --------------------------------------------------------
-
-    linkedin_jobs = fetch_linkedin()
-
-    all_jobs.extend(
-        linkedin_jobs
-    )
+            logger.exception(
+                "%s scraper failed: %s",
+                source_name,
+                error,
+            )
 
     # --------------------------------------------------------
     # Remove duplicates
     # --------------------------------------------------------
 
-    combined_jobs = unique_jobs(
+    all_jobs = deduplicate_jobs(
         all_jobs
     )
 
     logger.info(
-        "Combined jobs from all sources: %s",
-        len(combined_jobs)
+        "Total unique jobs fetched: %s",
+        len(all_jobs),
     )
 
-    return combined_jobs
+    # --------------------------------------------------------
+    # Print category discovery statistics
+    # --------------------------------------------------------
 
+    logger.info(
+        "========== Role Discovery Summary =========="
+    )
 
-# ============================================================
-# DIRECT TEST
-# ============================================================
+    for category in ROLE_SEARCHES:
 
-if __name__ == "__main__":
+        count = 0
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format=(
-            "%(asctime)s | "
-            "%(levelname)s | "
-            "%(message)s"
+        for job in all_jobs:
+
+            text = (
+                f"{job.get('title', '')} "
+                f"{job.get('description', '')} "
+                f"{' '.join(job.get('tags', []))}"
+            ).lower()
+
+            if any(
+                keyword.lower() in text
+                for keyword in ROLE_SEARCHES[category]
+            ):
+                count += 1
+
+        logger.info(
+            "%s: %s possible matches",
+            category,
+            count,
         )
+
+    logger.info(
+        "============================================"
     )
 
-    jobs = fetch_all_jobs()
+    return all_jobs
 
-    print(
-        f"Fetched {len(jobs)} total jobs."
-    )
