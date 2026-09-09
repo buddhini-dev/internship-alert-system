@@ -1,4 +1,3 @@
-
 import logging
 import time
 import hashlib
@@ -48,11 +47,19 @@ ROLE_SEARCHES = {
         "software developer internship",
         "junior software engineer",
         "graduate software engineer",
+        "backend developer intern",
+        "backend engineering intern",
+        "backend intern",
+        "full stack intern",
+        "full stack developer intern",
+        "web developer intern",
+        "application developer intern",
     ],
 
     "AI/ML": [
         "machine learning intern",
         "machine learning internship",
+        "machine learning engineer intern",
         "ml engineer intern",
         "ml internship",
         "ai intern",
@@ -61,6 +68,12 @@ ROLE_SEARCHES = {
         "ai/ml intern",
         "artificial intelligence intern",
         "deep learning intern",
+        "generative ai intern",
+        "llm intern",
+        "nlp intern",
+        "computer vision intern",
+        "mlops intern",
+        "applied ai intern",
     ],
 
     "Data Engineering": [
@@ -71,6 +84,67 @@ ROLE_SEARCHES = {
         "junior data engineer",
         "graduate data engineer",
         "analytics engineer intern",
+        "big data intern",
+        "big data engineer intern",
+        "etl developer intern",
+        "etl engineer intern",
+        "data pipeline intern",
+        "data warehouse intern",
+        "data platform intern",
+    ],
+
+    "Analytics": [
+        "data analyst intern",
+        "junior data analyst",
+        "business analyst intern",
+        "business analytics intern",
+        "business intelligence intern",
+        "bi developer intern",
+        "reporting analyst intern",
+        "analytics intern",
+        "product analytics intern",
+        "decision science intern",
+    ],
+
+    "Database": [
+        "database administrator intern",
+        "database engineer intern",
+        "sql developer intern",
+        "database intern",
+        "data architect intern",
+    ],
+
+    "Cloud": [
+        "cloud engineering intern",
+        "cloud engineer intern",
+        "cloud computing intern",
+        "aws intern",
+        "azure intern",
+        "gcp intern",
+        "cloud operations intern",
+    ],
+
+    "DevOps": [
+        "devops intern",
+        "devops engineer intern",
+        "site reliability engineer intern",
+        "sre intern",
+        "platform engineer intern",
+    ],
+
+    "Research": [
+        "research intern ai",
+        "research intern machine learning",
+        "research assistant ai",
+        "research assistant data science",
+    ],
+
+    "Related Data Roles": [
+        "data operations intern",
+        "data quality intern",
+        "data governance intern",
+        "quantitative analyst intern",
+        "quant intern",
     ],
 }
 
@@ -882,4 +956,3 @@ def fetch_all_jobs() -> List[Dict]:
     )
 
     return all_jobs
-
