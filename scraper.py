@@ -741,50 +741,6 @@ def fetch_xpressjobs() -> List[Dict]:
 
     return jobs
 
-
-def fetch_linkedin() -> List[Dict]:
-    jobs = []
-
-    logger.info(
-        "Fetching LinkedIn job discovery results..."
-    )
-
-    # IMPORTANT:
-    # This does NOT log into LinkedIn or scrape private pages.
-    # It uses public search-index discovery.
-
-    for category, searches in ROLE_SEARCHES.items():
-
-        for query in searches:
-
-            logger.info(
-                "LinkedIn search: %s",
-                query,
-            )
-
-            results = fetch_google_news_search(
-                query=query,
-                source="LinkedIn",
-                site_filter="linkedin.com/jobs/view",
-            )
-
-            for job in results:
-                job["category"] = category
-
-            jobs.extend(results)
-
-            time.sleep(0.5)
-
-    jobs = deduplicate_jobs(jobs)
-
-    logger.info(
-        "LinkedIn: %s jobs discovered",
-        len(jobs),
-    )
-
-    return jobs
-
-
 # ============================================================
 # DEDUPLICATION
 # ============================================================
@@ -847,13 +803,12 @@ def fetch_all_jobs() -> List[Dict]:
     # --------------------------------------------------------
 
     fetchers = [
-        ("RemoteOK", fetch_remoteok),
-        ("ITPro.lk", fetch_itpro),
-        ("TopJobs", fetch_topjobs),
-        ("InternJobs.lk", fetch_internjobs),
-        ("Wellfound", fetch_wellfound),
-        ("XpressJobs", fetch_xpressjobs),
-        ("LinkedIn", fetch_linkedin),
+    ("RemoteOK", fetch_remoteok),
+    ("ITPro.lk", fetch_itpro),
+    ("TopJobs", fetch_topjobs),
+    ("InternJobs.lk", fetch_internjobs),
+    ("Wellfound", fetch_wellfound),
+    ("XpressJobs", fetch_xpressjobs),
     ]
 
     for source_name, fetcher in fetchers:
