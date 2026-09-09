@@ -11,6 +11,20 @@ from config import config
 logger = logging.getLogger(__name__)
 
 
+def get_recipients() -> List[str]:
+    """
+    Get all email recipients from EMAIL_RECIPIENT.
+
+    Multiple addresses can be separated by commas.
+    """
+
+    return [
+        email.strip()
+        for email in config.EMAIL_RECIPIENT.split(",")
+        if email.strip()
+    ]
+
+
 def build_email_html(
     jobs: List[Dict]
 ) -> str:
@@ -145,6 +159,14 @@ def send_email(
 
         return
 
+    recipients = get_recipients()
+
+    if not recipients:
+
+        raise ValueError(
+            "No email recipients configured."
+        )
+
     if len(jobs) == 1:
 
         subject = (
@@ -167,7 +189,12 @@ def send_email(
     )
 
     message["From"] = config.EMAIL_USER
-    message["To"] = config.EMAIL_RECIPIENT
+
+    # Display all recipients in the email header
+    message["To"] = ", ".join(
+        recipients
+    )
+
     message["Subject"] = subject
 
     message.attach(
@@ -204,21 +231,29 @@ def send_email(
 
         logger.info(
             "Sending email to %s",
-            config.EMAIL_RECIPIENT
+            ", ".join(recipients)
         )
 
         server.sendmail(
             config.EMAIL_USER,
-            config.EMAIL_RECIPIENT,
+            recipients,
             message.as_string()
         )
 
     logger.info(
-        "Email sent successfully."
+        "Email sent successfully to all recipients."
     )
 
 
 def send_test_email():
+
+    recipients = get_recipients()
+
+    if not recipients:
+
+        raise ValueError(
+            "No email recipients configured."
+        )
 
     subject = (
         "🧪 Internship Alert System "
@@ -255,7 +290,11 @@ def send_test_email():
     )
 
     message["From"] = config.EMAIL_USER
-    message["To"] = config.EMAIL_RECIPIENT
+
+    message["To"] = ", ".join(
+        recipients
+    )
+
     message["Subject"] = subject
 
     message.attach(
@@ -267,7 +306,7 @@ def send_test_email():
 
     logger.info(
         "Sending TEST email to %s",
-        config.EMAIL_RECIPIENT
+        ", ".join(recipients)
     )
 
     with smtplib.SMTP(
@@ -293,10 +332,10 @@ def send_test_email():
 
         server.sendmail(
             config.EMAIL_USER,
-            config.EMAIL_RECIPIENT,
+            recipients,
             message.as_string()
         )
 
     logger.info(
-        "TEST email sent successfully."
+        "TEST email sent successfully to all recipients."
     )
