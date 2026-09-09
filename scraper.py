@@ -1,4 +1,3 @@
-```python
 import hashlib
 import logging
 import time
@@ -336,12 +335,6 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
 
         jobs = []
 
-        # ----------------------------------------------------
-        # Inspect all links on the Recent Jobs page.
-        # TopJobs can use different HTML structures, so
-        # we inspect the link and surrounding containers.
-        # ----------------------------------------------------
-
         for link in soup.find_all(
             "a",
             href=True
@@ -360,10 +353,7 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
             if not title or not href:
                 continue
 
-            # ------------------------------------------------
             # Build full URL
-            # ------------------------------------------------
-
             full_url = href
 
             if href.startswith("/"):
@@ -394,10 +384,8 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
             ):
                 continue
 
-            # ------------------------------------------------
-            # Make sure this looks like a job link.
-            # ------------------------------------------------
-
+            # Make sure the link looks like
+            # an actual job listing.
             href_lower = href.lower()
 
             job_link = any(
@@ -413,10 +401,7 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
             if not job_link:
                 continue
 
-            # ------------------------------------------------
             # Get surrounding text.
-            # ------------------------------------------------
-
             parent_text = ""
 
             parent = link.parent
@@ -456,22 +441,13 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
                         grandparent_text
                     )
 
-            # ------------------------------------------------
-            # Combine title + surrounding text.
-            # ------------------------------------------------
-
             combined_text = (
                 f"{title} "
                 f"{parent_text}"
             ).lower()
 
-            # ------------------------------------------------
             # Identify possible technology/
-            # internship listings.
-            #
-            # Exact filtering happens later in main.py.
-            # ------------------------------------------------
-
+            # internship-related listings.
             possible_role = any(
                 keyword in combined_text
                 for keyword in [
@@ -497,10 +473,7 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
             if not possible_role:
                 continue
 
-            # ------------------------------------------------
             # Try to identify company.
-            # ------------------------------------------------
-
             company = (
                 "TopJobs Listing"
             )
@@ -542,10 +515,7 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
 
                             break
 
-            # ------------------------------------------------
             # Create unique ID.
-            # ------------------------------------------------
-
             job_id = create_job_id(
                 title,
                 company,
@@ -566,10 +536,7 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
                 }
             )
 
-        # ----------------------------------------------------
         # Remove duplicates.
-        # ----------------------------------------------------
-
         unique_jobs = {}
 
         for job in jobs:
@@ -616,40 +583,28 @@ def fetch_all_jobs() -> List[Dict[str, Any]]:
 
     all_jobs = []
 
-    # --------------------------------------------------------
     # RemoteOK
-    # --------------------------------------------------------
-
     remoteok_jobs = fetch_remoteok()
 
     all_jobs.extend(
         remoteok_jobs
     )
 
-    # --------------------------------------------------------
     # ITPro.lk
-    # --------------------------------------------------------
-
     itpro_jobs = fetch_itpro()
 
     all_jobs.extend(
         itpro_jobs
     )
 
-    # --------------------------------------------------------
     # TopJobs
-    # --------------------------------------------------------
-
     topjobs_jobs = fetch_topjobs()
 
     all_jobs.extend(
         topjobs_jobs
     )
 
-    # --------------------------------------------------------
     # Remove duplicates across all sources.
-    # --------------------------------------------------------
-
     unique_jobs = {}
 
     for job in all_jobs:
@@ -674,4 +629,22 @@ def fetch_all_jobs() -> List[Dict[str, Any]]:
     )
 
     return combined_jobs
-```
+
+
+if __name__ == "__main__":
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            "%(asctime)s | "
+            "%(levelname)s | "
+            "%(message)s"
+        )
+    )
+
+    jobs = fetch_all_jobs()
+
+    print(
+        f"Fetched {len(jobs)} total jobs."
+    )
+
