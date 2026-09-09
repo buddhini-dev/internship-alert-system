@@ -4,7 +4,9 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+import feedparser
 import requests
+from bs4 import BeautifulSoup
 
 from config import config
 
@@ -13,53 +15,54 @@ logger = logging.getLogger(__name__)
 
 REMOTE_OK_API = "https://remoteok.com/api"
 
+ITPRO_INTERNSHIP_RSS = (
+    "https://itpro.lk/rss/all/internship"
+)
 
-def create_job_id(title: str, company: str, url: str) -> str:
-    """
-    Creates a stable ID for a job.
-    """
+TOPJOBS_RECENT_URL = (
+    "https://www.topjobs.lk/recentjobs.jsp"
+)
 
-    raw = f"{title}|{company}|{url}".lower().strip()
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/140.0 Safari/537.36"
+    )
+}
+
+
+def create_job_id(
+    title: str,
+    company: str,
+    url: str
+) -> str:
+
+    raw = (
+        f"{title}|{company}|{url}"
+        .lower()
+        .strip()
+    )
 
     return hashlib.sha256(
         raw.encode("utf-8")
     ).hexdigest()
 
 
-def parse_remoteok_date(date_string: str):
-    """
-    Convert RemoteOK date to datetime.
-    """
-
-    if not date_string:
-        return None
-
-    try:
-        date_string = date_string.replace("Z", "+00:00")
-
-        return datetime.fromisoformat(date_string)
-
-    except ValueError:
-        return None
-
-
 def fetch_remoteok() -> List[Dict[str, Any]]:
-    """
-    Fetch jobs from RemoteOK public JSON feed.
-    """
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(compatible; InternshipAlertSystem/1.0)"
-        )
-    }
-
-    for attempt in range(1, config.MAX_RETRIES + 1):
+    for attempt in range(
+        1,
+        config.MAX_RETRIES + 1
+    ):
 
         try:
+
             logger.info(
-                "Fetching jobs from RemoteOK "
+                "Fetching RemoteOK "
                 "(attempt %s/%s)",
                 attempt,
                 config.MAX_RETRIES
@@ -67,7 +70,7 @@ def fetch_remoteok() -> List[Dict[str, Any]]:
 
             response = requests.get(
                 REMOTE_OK_API,
-                headers=headers,
+                headers=HEADERS,
                 timeout=30
             )
 
@@ -79,18 +82,22 @@ def fetch_remoteok() -> List[Dict[str, Any]]:
 
             for item in data:
 
-                # RemoteOK feed may contain metadata objects.
                 if not isinstance(item, dict):
                     continue
 
-                if not item.get("position"):
-                    continue
+                title = (
+                    item.get("position") or ""
+                ).strip()
 
-                title = item.get("position", "").strip()
-                company = item.get("company", "").strip()
-                url = item.get("url", "").strip()
+                company = (
+                    item.get("company") or ""
+                ).strip()
 
-                if not url:
+                url = (
+                    item.get("url") or ""
+                ).strip()
+
+                if not title or not url:
                     continue
 
                 job_id = create_job_id(
@@ -105,14 +112,25 @@ def fetch_remoteok() -> List[Dict[str, Any]]:
                         "title": title,
                         "company": company,
                         "url": url,
-                        "description": item.get(
-                            "description", ""
+                        "description": (
+                            item.get(
+                                "description",
+                                ""
+                            )
                         ),
-                        "location": item.get(
-                            "location", "Remote"
+                        "location": (
+                            item.get(
+                                "location",
+                                "Remote"
+                            )
                         ),
-                        "tags": item.get("tags", []),
-                        "date": item.get("date"),
+                        "tags": item.get(
+                            "tags",
+                            []
+                        ),
+                        "date": item.get(
+                            "date"
+                        ),
                         "source": "RemoteOK",
                     }
                 )
@@ -132,25 +150,341 @@ def fetch_remoteok() -> List[Dict[str, Any]]:
             )
 
             if attempt < config.MAX_RETRIES:
-                time.sleep(config.REQUEST_DELAY)
+                time.sleep(
+                    config.REQUEST_DELAY
+                )
 
         except ValueError as error:
 
             logger.error(
-                "Could not parse RemoteOK JSON: %s",
+                "RemoteOK JSON error: %s",
                 error
             )
 
-            break
+            return []
 
     return []
 
 
+def fetch_itpro() -> List[Dict[str, Any]]:
+
+    logger.info(
+        "Fetching ITPro.lk internship RSS feed"
+    )
+
+    try:
+
+        response = requests.get(
+            ITPRO_INTERNSHIP_RSS,
+            headers=HEADERS,
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        feed = feedparser.parse(
+            response.content
+        )
+
+        jobs = []
+
+        for entry in feed.entries:
+
+            title = (
+                entry.get("title") or ""
+            ).strip()
+
+            url = (
+                entry.get("link") or ""
+            ).strip()
+
+            if not title or not url:
+                continue
+
+            description = (
+                entry.get(
+                    "summary",
+                    ""
+                )
+            )
+
+            soup = BeautifulSoup(
+                description,
+                "html.parser"
+            )
+
+            description = soup.get_text(
+                " ",
+                strip=True
+            )
+
+            company = (
+                entry.get(
+                    "author",
+                    ""
+                )
+                or "ITPro.lk Listing"
+            )
+
+            published = (
+                entry.get(
+                    "published",
+                    ""
+                )
+            )
+
+            job_id = create_job_id(
+                title,
+                company,
+                url
+            )
+
+            jobs.append(
+                {
+                    "id": job_id,
+                    "title": title,
+                    "company": company,
+                    "url": url,
+                    "description": description,
+                    "location": "Sri Lanka",
+                    "tags": [],
+                    "date": published,
+                    "source": "ITPro.lk",
+                }
+            )
+
+        logger.info(
+            "ITPro.lk returned %s jobs",
+            len(jobs)
+        )
+
+        return jobs
+
+    except requests.RequestException as error:
+
+        logger.error(
+            "ITPro.lk request failed: %s",
+            error
+        )
+
+        return []
+
+    except Exception as error:
+
+        logger.error(
+            "ITPro.lk RSS parsing failed: %s",
+            error
+        )
+
+        return []
+
+
+def fetch_topjobs() -> List[Dict[str, Any]]:
+
+    logger.info(
+        "Fetching TopJobs recent jobs"
+    )
+
+    try:
+
+        response = requests.get(
+            TOPJOBS_RECENT_URL,
+            headers=HEADERS,
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
+
+        jobs = []
+
+        # TopJobs publishes a recent-jobs page.
+        # We inspect links and nearby text to identify
+        # relevant technology/internship postings.
+
+        for link in soup.find_all(
+            "a",
+            href=True
+        ):
+
+            title = link.get_text(
+                " ",
+                strip=True
+            )
+
+            if not title:
+                continue
+
+            href = link.get(
+                "href",
+                ""
+            ).strip()
+
+            full_url = href
+
+            if href.startswith("/"):
+                full_url = (
+                    "https://www.topjobs.lk"
+                    + href
+                )
+
+            if not full_url.startswith(
+                "http"
+            ):
+                continue
+
+            title_lower = title.lower()
+
+            possible_role = any(
+                keyword in title_lower
+                for keyword in [
+                    "intern",
+                    "internship",
+                    "software",
+                    "developer",
+                    "data",
+                    "machine learning",
+                    "artificial intelligence",
+                    "ai",
+                    "engineer",
+                    "qa",
+                    "devops",
+                    "cloud",
+                ]
+            )
+
+            if not possible_role:
+                continue
+
+            parent_text = ""
+
+            if link.parent:
+                parent_text = link.parent.get_text(
+                    " ",
+                    strip=True
+                )
+
+            company = (
+                "TopJobs Listing"
+            )
+
+            if " - " in parent_text:
+
+                parts = parent_text.split(
+                    " - ",
+                    1
+                )
+
+                if len(parts) == 2:
+                    possible_company = (
+                        parts[1].strip()
+                    )
+
+                    if possible_company:
+                        company = (
+                            possible_company
+                        )
+
+            job_id = create_job_id(
+                title,
+                company,
+                full_url
+            )
+
+            jobs.append(
+                {
+                    "id": job_id,
+                    "title": title,
+                    "company": company,
+                    "url": full_url,
+                    "description": parent_text,
+                    "location": "Sri Lanka",
+                    "tags": [],
+                    "date": None,
+                    "source": "TopJobs",
+                }
+            )
+
+        # Remove duplicate IDs
+        unique_jobs = {}
+
+        for job in jobs:
+            unique_jobs[
+                job["id"]
+            ] = job
+
+        jobs = list(
+            unique_jobs.values()
+        )
+
+        logger.info(
+            "TopJobs returned %s possible jobs",
+            len(jobs)
+        )
+
+        return jobs
+
+    except requests.RequestException as error:
+
+        logger.error(
+            "TopJobs request failed: %s",
+            error
+        )
+
+        return []
+
+    except Exception as error:
+
+        logger.error(
+            "TopJobs parsing failed: %s",
+            error
+        )
+
+        return []
+
+
 def fetch_all_jobs() -> List[Dict[str, Any]]:
-    """
-    Main scraper entry point.
-    """
 
-    jobs = fetch_remoteok()
+    all_jobs = []
 
-    return jobs
+    remoteok_jobs = fetch_remoteok()
+    all_jobs.extend(
+        remoteok_jobs
+    )
+
+    itpro_jobs = fetch_itpro()
+    all_jobs.extend(
+        itpro_jobs
+    )
+
+    topjobs_jobs = fetch_topjobs()
+    all_jobs.extend(
+        topjobs_jobs
+    )
+
+    # Remove duplicates across sources.
+    unique_jobs = {}
+
+    for job in all_jobs:
+
+        job_id = job.get("id")
+
+        if job_id:
+            unique_jobs[
+                job_id
+            ] = job
+
+    combined_jobs = list(
+        unique_jobs.values()
+    )
+
+    logger.info(
+        "Combined jobs from all sources: %s",
+        len(combined_jobs)
+    )
+
+    return combined_jobs
