@@ -1,7 +1,7 @@
+```python
 import hashlib
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import feedparser
@@ -12,6 +12,11 @@ from config import config
 
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# SOURCE URLS
+# ============================================================
 
 REMOTE_OK_API = "https://remoteok.com/api"
 
@@ -24,6 +29,10 @@ TOPJOBS_RECENT_URL = (
 )
 
 
+# ============================================================
+# REQUEST HEADERS
+# ============================================================
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 "
@@ -34,6 +43,10 @@ HEADERS = {
     )
 }
 
+
+# ============================================================
+# JOB ID
+# ============================================================
 
 def create_job_id(
     title: str,
@@ -51,6 +64,10 @@ def create_job_id(
         raw.encode("utf-8")
     ).hexdigest()
 
+
+# ============================================================
+# REMOTEOK
+# ============================================================
 
 def fetch_remoteok() -> List[Dict[str, Any]]:
 
@@ -82,19 +99,25 @@ def fetch_remoteok() -> List[Dict[str, Any]]:
 
             for item in data:
 
-                if not isinstance(item, dict):
+                if not isinstance(
+                    item,
+                    dict
+                ):
                     continue
 
                 title = (
-                    item.get("position") or ""
+                    item.get("position")
+                    or ""
                 ).strip()
 
                 company = (
-                    item.get("company") or ""
+                    item.get("company")
+                    or ""
                 ).strip()
 
                 url = (
-                    item.get("url") or ""
+                    item.get("url")
+                    or ""
                 ).strip()
 
                 if not title or not url:
@@ -150,6 +173,7 @@ def fetch_remoteok() -> List[Dict[str, Any]]:
             )
 
             if attempt < config.MAX_RETRIES:
+
                 time.sleep(
                     config.REQUEST_DELAY
                 )
@@ -165,6 +189,10 @@ def fetch_remoteok() -> List[Dict[str, Any]]:
 
     return []
 
+
+# ============================================================
+# ITPRO.LK
+# ============================================================
 
 def fetch_itpro() -> List[Dict[str, Any]]:
 
@@ -191,11 +219,13 @@ def fetch_itpro() -> List[Dict[str, Any]]:
         for entry in feed.entries:
 
             title = (
-                entry.get("title") or ""
+                entry.get("title")
+                or ""
             ).strip()
 
             url = (
-                entry.get("link") or ""
+                entry.get("link")
+                or ""
             ).strip()
 
             if not title or not url:
@@ -279,6 +309,10 @@ def fetch_itpro() -> List[Dict[str, Any]]:
         return []
 
 
+# ============================================================
+# TOPJOBS
+# ============================================================
+
 def fetch_topjobs() -> List[Dict[str, Any]]:
 
     logger.info(
@@ -302,9 +336,11 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
 
         jobs = []
 
-        # TopJobs publishes a recent-jobs page.
-        # We inspect links and nearby text to identify
-        # relevant technology/internship postings.
+        # ----------------------------------------------------
+        # Inspect all links on the Recent Jobs page.
+        # TopJobs can use different HTML structures, so
+        # we inspect the link and surrounding containers.
+        # ----------------------------------------------------
 
         for link in soup.find_all(
             "a",
@@ -316,19 +352,40 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
                 strip=True
             )
 
-            if not title:
-                continue
-
             href = link.get(
                 "href",
                 ""
             ).strip()
 
+            if not title or not href:
+                continue
+
+            # ------------------------------------------------
+            # Build full URL
+            # ------------------------------------------------
+
             full_url = href
 
             if href.startswith("/"):
+
                 full_url = (
                     "https://www.topjobs.lk"
+                    + href
+                )
+
+            elif href.startswith("./"):
+
+                full_url = (
+                    "https://www.topjobs.lk/"
+                    + href[2:]
+                )
+
+            elif href.startswith(
+                "www.topjobs.lk"
+            ):
+
+                full_url = (
+                    "https://"
                     + href
                 )
 
@@ -337,57 +394,157 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
             ):
                 continue
 
-            title_lower = title.lower()
+            # ------------------------------------------------
+            # Make sure this looks like a job link.
+            # ------------------------------------------------
+
+            href_lower = href.lower()
+
+            job_link = any(
+                part in href_lower
+                for part in [
+                    "job",
+                    "vacancy",
+                    "jobs",
+                    "jobdetails",
+                ]
+            )
+
+            if not job_link:
+                continue
+
+            # ------------------------------------------------
+            # Get surrounding text.
+            # ------------------------------------------------
+
+            parent_text = ""
+
+            parent = link.parent
+
+            if parent:
+
+                parent_text = (
+                    parent.get_text(
+                        " ",
+                        strip=True
+                    )
+                )
+
+            # Check grandparent as well.
+            grandparent = (
+                parent.parent
+                if parent
+                else None
+            )
+
+            if grandparent:
+
+                grandparent_text = (
+                    grandparent.get_text(
+                        " ",
+                        strip=True
+                    )
+                )
+
+                if len(
+                    grandparent_text
+                ) > len(
+                    parent_text
+                ):
+
+                    parent_text = (
+                        grandparent_text
+                    )
+
+            # ------------------------------------------------
+            # Combine title + surrounding text.
+            # ------------------------------------------------
+
+            combined_text = (
+                f"{title} "
+                f"{parent_text}"
+            ).lower()
+
+            # ------------------------------------------------
+            # Identify possible technology/
+            # internship listings.
+            #
+            # Exact filtering happens later in main.py.
+            # ------------------------------------------------
 
             possible_role = any(
-                keyword in title_lower
+                keyword in combined_text
                 for keyword in [
                     "intern",
                     "internship",
+                    "trainee",
                     "software",
                     "developer",
-                    "data",
+                    "data scientist",
+                    "data science",
+                    "data engineer",
+                    "data engineering",
                     "machine learning",
                     "artificial intelligence",
-                    "ai",
-                    "engineer",
-                    "qa",
-                    "devops",
+                    "ai/ml",
+                    "ml engineer",
+                    "cloud engineer",
                     "cloud",
+                    "devops",
                 ]
             )
 
             if not possible_role:
                 continue
 
-            parent_text = ""
-
-            if link.parent:
-                parent_text = link.parent.get_text(
-                    " ",
-                    strip=True
-                )
+            # ------------------------------------------------
+            # Try to identify company.
+            # ------------------------------------------------
 
             company = (
                 "TopJobs Listing"
             )
 
-            if " - " in parent_text:
+            separators = [
+                " - ",
+                " | ",
+                " – ",
+                " — ",
+            ]
 
-                parts = parent_text.split(
-                    " - ",
-                    1
-                )
+            for separator in separators:
 
-                if len(parts) == 2:
-                    possible_company = (
-                        parts[1].strip()
+                if separator in parent_text:
+
+                    parts = (
+                        parent_text.split(
+                            separator,
+                            1
+                        )
                     )
 
-                    if possible_company:
-                        company = (
-                            possible_company
+                    if len(parts) == 2:
+
+                        possible_company = (
+                            parts[1].strip()
                         )
+
+                        if (
+                            possible_company
+                            and len(
+                                possible_company
+                            ) < 150
+                        ):
+
+                            company = (
+                                possible_company
+                            )
+
+                            break
+
+            # ------------------------------------------------
+            # Create unique ID.
+            # ------------------------------------------------
 
             job_id = create_job_id(
                 title,
@@ -409,10 +566,14 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
                 }
             )
 
-        # Remove duplicate IDs
+        # ----------------------------------------------------
+        # Remove duplicates.
+        # ----------------------------------------------------
+
         unique_jobs = {}
 
         for job in jobs:
+
             unique_jobs[
                 job["id"]
             ] = job
@@ -447,33 +608,58 @@ def fetch_topjobs() -> List[Dict[str, Any]]:
         return []
 
 
+# ============================================================
+# FETCH ALL SOURCES
+# ============================================================
+
 def fetch_all_jobs() -> List[Dict[str, Any]]:
 
     all_jobs = []
 
+    # --------------------------------------------------------
+    # RemoteOK
+    # --------------------------------------------------------
+
     remoteok_jobs = fetch_remoteok()
+
     all_jobs.extend(
         remoteok_jobs
     )
 
+    # --------------------------------------------------------
+    # ITPro.lk
+    # --------------------------------------------------------
+
     itpro_jobs = fetch_itpro()
+
     all_jobs.extend(
         itpro_jobs
     )
 
+    # --------------------------------------------------------
+    # TopJobs
+    # --------------------------------------------------------
+
     topjobs_jobs = fetch_topjobs()
+
     all_jobs.extend(
         topjobs_jobs
     )
 
-    # Remove duplicates across sources.
+    # --------------------------------------------------------
+    # Remove duplicates across all sources.
+    # --------------------------------------------------------
+
     unique_jobs = {}
 
     for job in all_jobs:
 
-        job_id = job.get("id")
+        job_id = job.get(
+            "id"
+        )
 
         if job_id:
+
             unique_jobs[
                 job_id
             ] = job
@@ -488,3 +674,4 @@ def fetch_all_jobs() -> List[Dict[str, Any]]:
     )
 
     return combined_jobs
+```
