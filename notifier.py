@@ -11,37 +11,55 @@ from config import config
 logger = logging.getLogger(__name__)
 
 
-def build_email_html(jobs: List[Dict]) -> str:
-
-    if not jobs:
-        return """
-        <html>
-        <body>
-            <h2>Internship Alert System</h2>
-            <p>No new matching internships were found.</p>
-        </body>
-        </html>
-        """
+def build_email_html(
+    jobs: List[Dict]
+) -> str:
 
     job_sections = []
 
     for job in jobs:
 
-        title = html.escape(job.get("title", "Unknown"))
-        company = html.escape(job.get("company", "Unknown"))
+        title = html.escape(
+            job.get(
+                "title",
+                "Unknown"
+            )
+        )
+
+        company = html.escape(
+            job.get(
+                "company",
+                "Unknown"
+            )
+        )
+
         location = html.escape(
-            job.get("location", "Remote")
+            job.get(
+                "location",
+                "Sri Lanka"
+            )
         )
+
         source = html.escape(
-            job.get("source", "Unknown")
-        )
-        url = html.escape(
-            job.get("url", "#"),
-            quote=True
+            job.get(
+                "source",
+                "Unknown"
+            )
         )
 
         category = html.escape(
-            job.get("category", "Other")
+            job.get(
+                "category",
+                "Other"
+            )
+        )
+
+        url = html.escape(
+            job.get(
+                "url",
+                "#"
+            ),
+            quote=True
         )
 
         job_sections.append(
@@ -92,13 +110,19 @@ def build_email_html(jobs: List[Dict]) -> str:
         <h2>🚨 New Internship Alerts</h2>
 
         <p>
-            Found <strong>{len(jobs)}</strong>
-            new matching job(s).
+            Found
+            <strong>{len(jobs)}</strong>
+            new matching internship(s).
         </p>
 
         {''.join(job_sections)}
 
         <hr>
+
+        <p>
+            Sources:
+            RemoteOK, ITPro.lk, TopJobs
+        </p>
 
         <p>
             Internship Alert System
@@ -109,41 +133,158 @@ def build_email_html(jobs: List[Dict]) -> str:
     """
 
 
-def send_email(jobs: List[Dict]):
+def send_email(
+    jobs: List[Dict]
+):
 
     if not jobs:
-        logger.info("No email needed because there are no new jobs.")
+
+        logger.info(
+            "No jobs to email."
+        )
+
         return
 
-    subject = (
-        f"🚨 {len(jobs)} New Internship "
-        f"Opportunity"
-        f"{'ies' if len(jobs) != 1 else 'y'}"
+    if len(jobs) == 1:
+
+        subject = (
+            "🚨 1 New Internship Opportunity"
+        )
+
+    else:
+
+        subject = (
+            f"🚨 {len(jobs)} New "
+            "Internship Opportunities"
+        )
+
+    html_body = build_email_html(
+        jobs
     )
 
-    html_body = build_email_html(jobs)
-
-    message = MIMEMultipart("alternative")
+    message = MIMEMultipart(
+        "alternative"
+    )
 
     message["From"] = config.EMAIL_USER
     message["To"] = config.EMAIL_RECIPIENT
     message["Subject"] = subject
 
     message.attach(
-        MIMEText(html_body, "html")
+        MIMEText(
+            html_body,
+            "html"
+        )
     )
 
     logger.info(
-        "Sending email to %s",
+        "Connecting to Gmail SMTP..."
+    )
+
+    with smtplib.SMTP(
+        config.SMTP_SERVER,
+        config.SMTP_PORT,
+        timeout=30
+    ) as server:
+
+        server.ehlo()
+
+        server.starttls()
+
+        server.ehlo()
+
+        logger.info(
+            "Logging into Gmail..."
+        )
+
+        server.login(
+            config.EMAIL_USER,
+            config.EMAIL_PASSWORD
+        )
+
+        logger.info(
+            "Sending email to %s",
+            config.EMAIL_RECIPIENT
+        )
+
+        server.sendmail(
+            config.EMAIL_USER,
+            config.EMAIL_RECIPIENT,
+            message.as_string()
+        )
+
+    logger.info(
+        "Email sent successfully."
+    )
+
+
+def send_test_email():
+
+    subject = (
+        "🧪 Internship Alert System "
+        "— Test Email"
+    )
+
+    html_body = """
+    <html>
+    <body>
+
+        <h2>🧪 Internship Alert System</h2>
+
+        <p>
+            Your test email was sent successfully.
+        </p>
+
+        <p>
+            Gmail SMTP is working correctly.
+        </p>
+
+        <hr>
+
+        <p>
+            The system is ready to send
+            internship alerts.
+        </p>
+
+    </body>
+    </html>
+    """
+
+    message = MIMEMultipart(
+        "alternative"
+    )
+
+    message["From"] = config.EMAIL_USER
+    message["To"] = config.EMAIL_RECIPIENT
+    message["Subject"] = subject
+
+    message.attach(
+        MIMEText(
+            html_body,
+            "html"
+        )
+    )
+
+    logger.info(
+        "Sending TEST email to %s",
         config.EMAIL_RECIPIENT
     )
 
     with smtplib.SMTP(
         config.SMTP_SERVER,
-        config.SMTP_PORT
+        config.SMTP_PORT,
+        timeout=30
     ) as server:
 
+        server.ehlo()
+
         server.starttls()
+
+        server.ehlo()
+
+        logger.info(
+            "Logging into Gmail..."
+        )
 
         server.login(
             config.EMAIL_USER,
@@ -156,4 +297,6 @@ def send_email(jobs: List[Dict]):
             message.as_string()
         )
 
-    logger.info("Email sent successfully.")
+    logger.info(
+        "TEST email sent successfully."
+    )
