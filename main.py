@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -9,7 +10,10 @@ from database import (
     mark_seen,
     save_seen_jobs,
 )
-from notifier import send_email
+from notifier import (
+    send_email,
+    send_test_email,
+)
 from scraper import fetch_all_jobs
 
 
@@ -17,7 +21,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -30,29 +33,50 @@ ROLE_PRIORITY = {
 }
 
 
-def normalize_text(value: str) -> str:
-    return (value or "").lower().strip()
+def normalize_text(
+    value: str
+) -> str:
+
+    return (
+        value or ""
+    ).lower().strip()
 
 
-def determine_category(job: Dict) -> Optional[str]:
+def determine_category(
+    job: Dict
+) -> Optional[str]:
 
     title = normalize_text(
-        job.get("title", "")
+        job.get(
+            "title",
+            ""
+        )
     )
 
     description = normalize_text(
-        job.get("description", "")
+        job.get(
+            "description",
+            ""
+        )
     )
 
-    tags = job.get("tags", [])
+    tags = job.get(
+        "tags",
+        []
+    )
 
     if isinstance(tags, list):
+
         tag_text = " ".join(
             str(tag).lower()
             for tag in tags
         )
+
     else:
-        tag_text = str(tags).lower()
+
+        tag_text = str(
+            tags
+        ).lower()
 
     combined = (
         f"{title} "
@@ -60,23 +84,28 @@ def determine_category(job: Dict) -> Optional[str]:
         f"{tag_text}"
     )
 
-    # Exclude analyst roles first.
+    # Explicit exclusions
     for excluded in config.EXCLUDED_KEYWORDS:
 
         if excluded in title:
+
             return None
 
-    # Check preferred categories.
-    for category, keywords in config.ROLE_KEYWORDS.items():
+    # Category matching
+    for category, keywords in (
+        config.ROLE_KEYWORDS.items()
+    ):
 
         for keyword in keywords:
 
             if keyword.lower() in combined:
 
-                # Do not classify generic analyst positions.
+                # Don't accidentally include
+                # analyst roles.
                 if (
                     "analyst" in title
-                    and "data scientist" not in title
+                    and "data scientist"
+                    not in title
                 ):
                     return None
 
@@ -85,84 +114,166 @@ def determine_category(job: Dict) -> Optional[str]:
     return None
 
 
-def is_internship(job: Dict) -> bool:
+def is_internship(
+    job: Dict
+) -> bool:
 
     title = normalize_text(
-        job.get("title", "")
+        job.get(
+            "title",
+            ""
+        )
     )
 
     description = normalize_text(
-        job.get("description", "")
+        job.get(
+            "description",
+            ""
+        )
     )
 
     combined = (
-        f"{title} {description}"
+        f"{title} "
+        f"{description}"
     )
 
-    internship_keywords = [
+    strong_internship_keywords = [
         "intern",
         "internship",
         "trainee",
-        "student",
-        "graduate",
         "co-op",
         "co op",
         "apprentice",
     ]
 
-    return any(
+    student_keywords = [
+        "student",
+        "undergraduate",
+        "undergrad",
+        "graduate",
+        "fresh graduate",
+        "recent graduate",
+    ]
+
+    entry_level_keywords = [
+        "entry level",
+        "entry-level",
+    ]
+
+    if any(
         keyword in combined
-        for keyword in internship_keywords
+        for keyword in strong_internship_keywords
+    ):
+        return True
+
+    if any(
+        keyword in combined
+        for keyword in student_keywords
+    ):
+        return True
+
+    # Entry-level is accepted only when
+    # the job is clearly one of our target
+    # technology roles.
+    if any(
+        keyword in combined
+        for keyword in entry_level_keywords
+    ):
+
+        target_role_words = [
+            "software",
+            "developer",
+            "data scientist",
+            "data science",
+            "machine learning",
+            "ml engineer",
+            "ai engineer",
+            "artificial intelligence",
+            "data engineer",
+        ]
+
+        return any(
+            word in combined
+            for word in target_role_words
+        )
+
+    return False
+
+
+def parse_job_date(
+    job: Dict
+):
+
+    date_value = job.get(
+        "date"
     )
-
-
-def parse_job_date(job: Dict):
-
-    date_value = job.get("date")
 
     if not date_value:
         return None
 
+    if isinstance(
+        date_value,
+        datetime
+    ):
+        return date_value
+
     try:
 
-        if isinstance(date_value, str):
+        date_string = str(
+            date_value
+        )
 
-            date_value = date_value.replace(
+        date_string = (
+            date_string
+            .replace(
                 "Z",
                 "+00:00"
             )
+        )
 
-            return datetime.fromisoformat(
-                date_value
-            )
+        return datetime.fromisoformat(
+            date_string
+        )
 
     except ValueError:
+
         return None
 
-    return None
 
+def is_recent(
+    job: Dict
+) -> bool:
 
-def is_recent(job: Dict) -> bool:
+    job_date = parse_job_date(
+        job
+    )
 
-    job_date = parse_job_date(job)
-
+    # Some sources don't provide
+    # a machine-readable date.
+    # Don't discard those jobs.
     if job_date is None:
-        # If source does not provide a usable date,
-        # keep the job rather than silently discarding it.
         return True
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(
+        timezone.utc
+    )
 
     if job_date.tzinfo is None:
-        job_date = job_date.replace(
-            tzinfo=timezone.utc
+
+        job_date = (
+            job_date.replace(
+                tzinfo=timezone.utc
+            )
         )
 
     age_days = (
         now - job_date
     ).total_seconds() / 86400
 
-    return age_days <= config.MAX_JOB_AGE_DAYS
+    return (
+        age_days
+        <= config.MAX_JOB_AGE_DAYS
+    )
 
 
 def process_jobs(
@@ -174,7 +285,9 @@ def process_jobs(
 
     for job in jobs:
 
-        job_id = job.get("id")
+        job_id = job.get(
+            "id"
+        )
 
         if not job_id:
             continue
@@ -182,29 +295,41 @@ def process_jobs(
         if job_id in seen_jobs:
             continue
 
-        category = determine_category(job)
+        category = determine_category(
+            job
+        )
 
         if category is None:
             continue
 
-        if not is_internship(job):
+        if not is_internship(
+            job
+        ):
             continue
 
-        if not is_recent(job):
+        if not is_recent(
+            job
+        ):
             continue
 
         job["category"] = category
 
-        matching_jobs.append(job)
+        matching_jobs.append(
+            job
+        )
 
-    # Highest priority first.
     matching_jobs.sort(
         key=lambda job: (
             ROLE_PRIORITY.get(
-                job.get("category"),
+                job.get(
+                    "category"
+                ),
                 99
             ),
-            job.get("title", "").lower()
+            job.get(
+                "title",
+                ""
+            ).lower()
         )
     )
 
@@ -220,6 +345,36 @@ def main():
     )
 
     config.validate()
+
+    # ------------------------------------------------
+    # TEST EMAIL MODE
+    # ------------------------------------------------
+
+    test_email = (
+        os.getenv(
+            "TEST_EMAIL",
+            "false"
+        ).lower()
+        == "true"
+    )
+
+    if test_email:
+
+        logger.info(
+            "TEST_EMAIL mode enabled."
+        )
+
+        send_test_email()
+
+        logger.info(
+            "Test email completed."
+        )
+
+        return
+
+    # ------------------------------------------------
+    # NORMAL MODE
+    # ------------------------------------------------
 
     ensure_database()
 
@@ -252,18 +407,41 @@ def main():
         for job in new_jobs:
 
             logger.info(
-                "MATCH | %s | %s | %s",
-                job.get("category"),
-                job.get("title"),
-                job.get("company"),
+                "MATCH | %s | %s | %s | %s",
+                job.get(
+                    "category"
+                ),
+                job.get(
+                    "title"
+                ),
+                job.get(
+                    "company"
+                ),
+                job.get(
+                    "source"
+                ),
             )
+
+        # IMPORTANT:
+        # Send the email FIRST.
+        #
+        # Only if email succeeds do we
+        # mark jobs as seen.
+        send_email(
+            new_jobs
+        )
+
+        for job in new_jobs:
 
             mark_seen(
                 job["id"],
                 seen_jobs
             )
 
-        send_email(new_jobs)
+        logger.info(
+            "Jobs marked as seen after "
+            "successful email delivery."
+        )
 
     else:
 
@@ -271,7 +449,9 @@ def main():
             "No new matching internships found."
         )
 
-    save_seen_jobs(seen_jobs)
+    save_seen_jobs(
+        seen_jobs
+    )
 
     logger.info(
         "Database/state saved."
